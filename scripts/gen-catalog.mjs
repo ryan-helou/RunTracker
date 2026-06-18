@@ -20,6 +20,26 @@ function pick(game, sourceCategory) {
   return c.splits.map((s) => s.name);
 }
 
+// Per-world NSMBW categories (run a single world). Standard in-world level
+// order; corroborated by the "All Regular Exits" + "100%" research data.
+const NSMBW_WORLDS = [
+  ["1", ["1-1", "1-2", "1-3", "1-Tower", "1-4", "1-5", "1-6", "1-Castle"]],
+  ["2", ["2-1", "2-2", "2-3", "2-Tower", "2-4", "2-5", "2-6", "2-Castle"]],
+  ["3", ["3-1", "3-2", "3-3", "3-Ghost House", "3-Tower", "3-4", "3-5", "3-Castle"]],
+  ["4", ["4-1", "4-2", "4-3", "4-Tower", "4-4", "4-Ghost House", "4-5", "4-Castle", "4-Airship"]],
+  ["5", ["5-1", "5-2", "5-3", "5-Tower", "5-4", "5-Ghost House", "5-5", "5-Castle"]],
+  ["6", ["6-1", "6-2", "6-3", "6-4", "6-Tower", "6-5", "6-6", "6-Castle", "6-Airship"]],
+  ["7", ["7-1", "7-2", "7-3", "7-Tower", "7-Ghost House", "7-4", "7-5", "7-6", "7-Castle"]],
+  ["8", ["8-1", "8-2", "8-3", "8-Tower", "8-4", "8-5", "8-6", "8-7", "8-Airship", "8-Bowser's Castle"]],
+  ["9", ["9-1", "9-2", "9-3", "9-4", "9-5", "9-6", "9-7", "9-8"]],
+];
+const nsmbwWorldCats = NSMBW_WORLDS.map(([n, levels]) => ({
+  key: `world-${n}`,
+  name: `World ${n}`,
+  description: `All ${levels.length} levels of World ${n}.`,
+  splits: levels,
+}));
+
 const GAMES = [
   {
     key: "nsmbw",
@@ -36,6 +56,7 @@ const GAMES = [
       { key: "100", name: "100%", description: "All Star Coins and exits.", src: "100% (Physical)" },
       { key: "all-regular-exits", name: "All Regular Exits", description: "Every standard level exit.", src: "All Regular Exits - Digital" },
       { key: "any-coop", name: "Any% (Multiplayer)", description: "Co-op Any% route.", src: "Any% Multiplayer - Physical" },
+      ...nsmbwWorldCats,
     ],
   },
   {
@@ -84,7 +105,7 @@ let body = "";
 for (const g of GAMES) {
   const catLines = g.categories
     .map((c) => {
-      const names = pick(g.game, c.src);
+      const names = c.splits ? c.splits : pick(g.game, c.src);
       const splits = names.map((n) => JSON.stringify(n)).join(", ");
       const desc = c.description ? `\n        description: ${JSON.stringify(c.description)},` : "";
       return `      {
