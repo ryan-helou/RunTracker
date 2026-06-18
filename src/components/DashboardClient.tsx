@@ -140,6 +140,12 @@ export function DashboardClient({
                       </div>
                     </div>
                     <Link
+                      href={`/stats/${game.key}/${c.key}`}
+                      className="text-xs text-muted underline-offset-4 transition-colors hover:text-fg hover:underline"
+                    >
+                      Stats
+                    </Link>
+                    <Link
                       href={`/play/${game.key}/${c.key}`}
                       className={buttonClass("primary", "sm")}
                     >
