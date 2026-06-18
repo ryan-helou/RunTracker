@@ -1,36 +1,126 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# RunTracker
 
-## Getting Started
+A live splitting tracker for Wii speedruns — **New Super Mario Bros. Wii**,
+**Mario Kart Wii**, and **Mario Party 9**. Pick a game and category, run a
+single continuous timer, tap your bound key at the end of every level/track, and
+watch each segment land **green when you're ahead** of your personal best and
+**red when you're behind**. Every run is saved to your account.
 
-First, run the development server:
+Built with **Next.js (App Router) + React + TypeScript**, **Neon Postgres**, and
+a small custom username/password auth layer. Designed to deploy on **Vercel**.
+
+---
+
+## Features
+
+- **Continuous RTA timer** — one monotonic clock; each split records the
+  cumulative time and the per-segment time is derived from it (LiveSplit model).
+- **Pace vs. Personal Best** — per-split ± deltas (green ahead / red behind), a
+  live overall delta on the main clock, **gold-split** highlighting for new best
+  segments, plus **Sum of Best**.
+- **Rebindable keys** — bind *any* physical key to Split, Undo, Skip,
+  Pause/Resume, and Reset (stored per browser).
+- **During-run controls** — start, split, skip a split, undo (step back / re-open
+  a finished run), pause/resume, reset.
+- **Post-run editing** — fix mis-timed splits, toggle skipped/completed, add a
+  note, or delete a run.
+- **Name-only accounts** — type your name and you're in (created on first use,
+  no password). Private run history, PBs computed per category. Up to ~5 users,
+  all on Neon's free tier.
+
+## Stack
+
+| Concern        | Choice                                            |
+| -------------- | ------------------------------------------------- |
+| Framework      | Next.js 16 (App Router), React 19, TypeScript     |
+| Styling        | Tailwind CSS v4 (custom dark "arcade" theme)      |
+| Database       | Neon Postgres (`@neondatabase/serverless`)        |
+| Auth           | name-only sign-in + signed JWT session cookie (jose)|
+| Hosting        | Vercel                                            |
+
+---
+
+## Local setup
+
+### 1. Create a Neon database
+
+1. Sign up at <https://console.neon.tech> and create a project.
+2. Open **Connection Details** and copy the **pooled** connection string
+   (the host contains `-pooler`). It looks like:
+   `postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/dbname?sslmode=require`
+
+### 2. Configure environment
+
+`.env.local` already exists with a generated `AUTH_SECRET`. Paste your Neon
+string into it:
+
+```bash
+DATABASE_URL="postgresql://...-pooler...sslmode=require"
+AUTH_SECRET="<already generated for you>"
+```
+
+### 3. Create the tables
+
+```bash
+npm run db:push
+```
+
+This applies [`src/lib/schema.sql`](src/lib/schema.sql) (idempotent).
+
+### 4. Run it
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000>, create an account, pick a category, and hit Start.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Deploying to Vercel
 
-## Learn More
+1. Push this repo to GitHub and **Import** it in Vercel.
+2. In the Vercel project, add the **Neon** integration (Marketplace) or set the
+   environment variables manually:
+   - `DATABASE_URL` — your Neon pooled connection string
+   - `AUTH_SECRET` — generate with `openssl rand -hex 32`
+3. Deploy. Run `npm run db:push` once against the production database (locally,
+   with `DATABASE_URL` pointed at prod) to create the tables.
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## How the timer works
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- The clock is **real-time (RTA)** and monotonic (`performance.now()`).
+- Pressing **Split** records the current cumulative time. The segment time is
+  `cumulative − previous cumulative`. Pressing Split on the final split finishes
+  the run.
+- **Personal Best** is the lowest *completed* total for that category; its
+  cumulative splits are the comparison line. **Gold segments** are your best-ever
+  time for each individual split across all runs; their sum is the **Sum of Best**.
 
-## Deploy on Vercel
+## Project layout
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+src/
+  app/
+    api/auth/{register,login,logout,me}/route.ts   # auth endpoints
+    api/runs/route.ts, api/runs/[id]/route.ts      # run CRUD
+    api/comparison/route.ts                        # PB + gold computation
+    play/[game]/[category]/page.tsx                # live run screen
+    runs/[id]/page.tsx                             # post-run editor
+    dashboard/page.tsx, login, register, page.tsx
+  components/                                       # UI (RunScreen, etc.)
+  hooks/useRunEngine.ts, useHotkey.ts, useKeybindings.ts
+  lib/catalog.ts                                    # games / categories / splits
+  lib/{db,auth,comparison,runs,format,keys,types}.ts
+scripts/migrate.mjs                                 # `npm run db:push`
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Categories & splits
+
+Game/category/split definitions live in [`src/lib/catalog.ts`](src/lib/catalog.ts).
+Only categories with **2+ splits** are included (single individual levels are
+intentionally excluded). Mario Kart Wii cup/track data is final; NSMBW and Mario
+Party 9 routes are being reconciled against speedrun.com research and may be
+expanded.
