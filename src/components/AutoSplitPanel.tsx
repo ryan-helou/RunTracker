@@ -119,7 +119,7 @@ export function AutoSplitPanel({
               >
                 {as.recording ? "Listening… (4s)" : "● Record the sound"}
               </button>
-              <span className="text-xs text-faint">{as.sampleCount} captured</span>
+              <span className="text-xs text-faint">{as.sampleCount} captured (keeps best 4)</span>
               <button
                 onClick={as.saveTemplate}
                 disabled={as.sampleCount < 1}
@@ -149,8 +149,8 @@ export function AutoSplitPanel({
               </div>
               <input
                 type="range"
-                min={0.7}
-                max={0.95}
+                min={0.6}
+                max={0.92}
                 step={0.01}
                 value={as.threshold}
                 onChange={(e) => as.setSensitivity(Number(e.target.value))}
