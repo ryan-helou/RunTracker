@@ -98,15 +98,25 @@ export function AutoSplitPanel({
         {/* 2. Calibrate */}
         {listening && (
           <>
-            <p className="eyebrow mt-6">2 · Teach it the sound</p>
-            {as.hasTemplate && (
+            <p className="eyebrow mt-6">
+              2 · {as.usingDefault ? "Calibration (optional)" : "Teach it the sound"}
+            </p>
+            {as.usingDefault ? (
+              <p className="mt-1 text-sm text-ahead">
+                ✓ Built-in detection ready — no calibration needed. Recalibrate below only to
+                fine-tune for your exact audio.
+              </p>
+            ) : as.hasTemplate ? (
               <p className="mt-1 flex items-center gap-2 text-sm text-ahead">
-                ✓ Sound learned
-                <button onClick={as.clearTemplate} className="text-xs text-muted underline-offset-4 hover:text-fg hover:underline">
+                ✓ Calibrated to your setup
+                <button
+                  onClick={as.clearTemplate}
+                  className="text-xs text-muted underline-offset-4 hover:text-fg hover:underline"
+                >
                   clear
                 </button>
               </p>
-            )}
+            ) : null}
             <p className="mt-2 text-[0.78rem] leading-relaxed text-muted">
               Click <span className="text-fg">Record</span>, then make the {gameName} level-clear sound
               play within 4 seconds (clear a level, or play a clip). Do it 2–3× for accuracy.

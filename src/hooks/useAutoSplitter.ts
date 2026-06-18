@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DEFAULT_TEMPLATES } from "@/lib/autoTemplates";
 
 const BANDS = 40;
 const FFT = 2048;
 const HOP = 1024;
-const TEMPLATE_MS = 450;
+const T_FRAMES = 21; // fixed so built-in templates match regardless of sample rate
 const RECORD_MS = 4000;
 const RADIUS = 4;
 const MAX_TEMPLATES = 4;
@@ -29,6 +30,7 @@ export interface AutoSplitter {
   threshold: number;
   detecting: boolean;
   hasTemplate: boolean;
+  usingDefault: boolean;
   sampleCount: number;
   recording: boolean;
   devices: MediaDeviceInfo[];
@@ -49,7 +51,6 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   const ctxRef = useRef<AudioContext | null>(null);
   const nodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const tRef = useRef<number>(Math.round((TEMPLATE_MS / 1000) * 48000 / HOP));
   const samplesRef = useRef<Float32Array[]>([]);
   const recTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -65,6 +66,9 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
 
   const tplKey = `rt_autotemplate_v2:${gameKey}`;
+  const defaultTpl = (DEFAULT_TEMPLATES[gameKey] as StoredTemplate | undefined) ?? null;
+  const usingDefault = !template && !!defaultTpl;
+  const hasTemplate = !!template || !!defaultTpl;
 
   useEffect(() => {
     try {
@@ -122,6 +126,17 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     } catch {}
   }, []);
 
+  const postTemplate = useCallback(
+    (node: AudioWorkletNode, tpl: StoredTemplate | null) => {
+      if (tpl && tpl.count > 0 && tpl.data.length === tpl.count * T_FRAMES * BANDS) {
+        node.port.postMessage({ type: "setTemplate", count: tpl.count, data: Float32Array.from(tpl.data) });
+      } else {
+        node.port.postMessage({ type: "setTemplate", count: 0, data: null });
+      }
+    },
+    [],
+  );
+
   const start = useCallback(
     async (method: CaptureMethod, deviceId?: string) => {
       setError(null);
@@ -149,15 +164,12 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
         await ctx.resume().catch(() => {});
         await ctx.audioWorklet.addModule("/audio-splitter.worklet.js");
 
-        const T = Math.round((TEMPLATE_MS / 1000) * ctx.sampleRate / HOP);
-        tRef.current = T;
-
         const node = new AudioWorkletNode(ctx, "audio-splitter", {
           processorOptions: {
             fftSize: FFT,
             hop: HOP,
             bands: BANDS,
-            templateLen: T,
+            templateLen: T_FRAMES,
             radius: RADIUS,
             onsetFactor: 1.9,
             cooldownMs: 4000,
@@ -174,9 +186,7 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
         sink.connect(ctx.destination);
         nodeRef.current = node;
 
-        if (template && template.T === T && template.count > 0 && template.data.length === template.count * T * BANDS) {
-          node.port.postMessage({ type: "setTemplate", count: template.count, data: Float32Array.from(template.data) });
-        }
+        postTemplate(node, template ?? defaultTpl);
 
         stream.getAudioTracks()[0].addEventListener("ended", () => stop());
         setStatus("listening");
@@ -187,7 +197,7 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
         streamRef.current?.getTracks().forEach((t) => t.stop());
       }
     },
-    [handleMsg, template, threshold, stop, refreshDevices],
+    [handleMsg, template, defaultTpl, threshold, stop, refreshDevices, postTemplate],
   );
 
   const setDetect = useCallback((on: boolean) => {
@@ -211,11 +221,10 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   const saveTemplate = useCallback(() => {
     const kept = samplesRef.current.slice(-MAX_TEMPLATES);
     if (kept.length === 0) return;
-    const T = tRef.current;
-    const stride = T * BANDS;
+    const stride = T_FRAMES * BANDS;
     const all = new Float32Array(kept.length * stride);
     kept.forEach((s, i) => all.set(s.subarray(0, stride), i * stride));
-    const stored: StoredTemplate = { T, bands: BANDS, count: kept.length, data: Array.from(all) };
+    const stored: StoredTemplate = { T: T_FRAMES, bands: BANDS, count: kept.length, data: Array.from(all) };
     setTemplate(stored);
     samplesRef.current = [];
     setSampleCount(0);
@@ -229,12 +238,18 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     setTemplate(null);
     samplesRef.current = [];
     setSampleCount(0);
-    setDetect(false);
     try {
       localStorage.removeItem(tplKey);
     } catch {}
-    nodeRef.current?.port.postMessage({ type: "setTemplate", count: 0, data: null });
-  }, [tplKey, setDetect]);
+    // fall back to the built-in default (if any); otherwise clear detection
+    if (nodeRef.current) {
+      if (defaultTpl) postTemplate(nodeRef.current, defaultTpl);
+      else {
+        setDetect(false);
+        nodeRef.current.port.postMessage({ type: "setTemplate", count: 0, data: null });
+      }
+    }
+  }, [tplKey, defaultTpl, postTemplate, setDetect]);
 
   useEffect(() => () => stop(), [stop]);
 
@@ -245,7 +260,8 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     score,
     threshold,
     detecting,
-    hasTemplate: !!template,
+    hasTemplate,
+    usingDefault,
     sampleCount,
     recording,
     devices,
