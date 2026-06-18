@@ -14,9 +14,25 @@ export function TopBar({ username }: { username: string }) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-ink/80 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
-        <Link href="/dashboard" className="ring-focus rounded">
-          <Brand size="md" />
-        </Link>
+        <div className="flex items-center gap-5">
+          <Link href="/dashboard" className="ring-focus rounded">
+            <Brand size="md" />
+          </Link>
+          <nav className="hidden items-center gap-1 sm:flex">
+            <Link
+              href="/dashboard"
+              className="rounded-md px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >
+              Dashboard
+            </Link>
+            <Link
+              href="/leaderboard"
+              className="rounded-md px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >
+              Leaderboard
+            </Link>
+          </nav>
+        </div>
         <div className="flex items-center gap-3">
           <button
             onClick={() => setOpen(true)}
