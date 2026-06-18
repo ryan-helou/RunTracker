@@ -22,6 +22,12 @@ a small custom username/password auth layer. Designed to deploy on **Vercel**.
 - **Game feel** — synthesized **sound cues** (split / gold / new-PB / reset) with
   a mute toggle, **fullscreen focus mode**, and **double-tap reset** so an
   accidental keypress can't nuke a run.
+- **Auto-split (beta — NSMBW + Mario Kart Wii)** — listens to the game audio and
+  splits automatically when it hears the level-clear sound. Calibrate once (it
+  learns the sound from your own setup), tune sensitivity, and it runs on an
+  AudioWorklet so detection keeps working while you're focused on the game.
+  Capture via an audio input (capture card / virtual device) or a browser tab.
+  Manual key stays as a backup.
 - **Rebindable keys** — bind *any* physical key to Split, Undo, Skip,
   Pause/Resume, and Reset (stored per browser).
 - **During-run controls** — start, split, skip a split, undo (step back / re-open

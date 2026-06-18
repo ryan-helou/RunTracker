@@ -6,6 +6,8 @@ import { useRunEngine } from "@/hooks/useRunEngine";
 import { useKeybindings } from "@/hooks/useKeybindings";
 import { useHotkey } from "@/hooks/useHotkey";
 import { KeybindingsModal } from "./KeybindingsModal";
+import { AutoSplitPanel } from "./AutoSplitPanel";
+import { useAutoSplitter } from "@/hooks/useAutoSplitter";
 import { formatMs, formatDelta } from "@/lib/format";
 import { keyLabel } from "@/lib/keys";
 import { sfx, type SfxName } from "@/lib/sound";
@@ -40,9 +42,11 @@ export function RunScreen(props: Props) {
 
   const engine = useRunEngine(splitNames);
   const kb = useKeybindings();
+  const autoSplitSupported = gameKey === "nsmbw" || gameKey === "mkw";
 
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
   const [isNewPB, setIsNewPB] = useState(false);
@@ -162,7 +166,9 @@ export function RunScreen(props: Props) {
     }
   }, [engine, play]);
 
-  const hotkeysOn = !settingsOpen && saveState !== "saving";
+  const auto = useAutoSplitter(gameKey, handleSplit);
+
+  const hotkeysOn = !settingsOpen && !autoOpen && saveState !== "saving";
   useHotkey(kb.bindings.split, onSplitKey, hotkeysOn);
   useHotkey(kb.bindings.skip, () => engine.skip(), hotkeysOn);
   useHotkey(kb.bindings.undo, () => engine.undo(), hotkeysOn);
@@ -307,6 +313,15 @@ export function RunScreen(props: Props) {
           <button onClick={toggleFs} className={iconBtn} title="Fullscreen">
             {isFs ? "⤢" : "⛶"}
           </button>
+          {autoSplitSupported && (
+            <button
+              onClick={() => setAutoOpen(true)}
+              className={cn(iconBtn, auto.detecting && "border-ahead text-ahead")}
+              title="Auto-split (beta)"
+            >
+              🎧 Auto{auto.detecting ? " ●" : ""}
+            </button>
+          )}
           <button onClick={() => setSettingsOpen(true)} className={iconBtn}>
             ⌨ Keys
           </button>
@@ -596,6 +611,9 @@ export function RunScreen(props: Props) {
       </p>
 
       <KeybindingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} kb={kb} />
+      {autoSplitSupported && (
+        <AutoSplitPanel open={autoOpen} onClose={() => setAutoOpen(false)} as={auto} gameName={gameName} />
+      )}
     </main>
   );
 }
