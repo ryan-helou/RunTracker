@@ -45,8 +45,10 @@ class AudioSplitter extends AudioWorkletProcessor {
     this.bands = o.bands || 40;
     this.T = o.templateLen || 21;
     this.radius = o.radius || 4;
-    this.threshold = o.threshold != null ? o.threshold : 0.78;
-    this.onsetFactor = o.onsetFactor || 1.9;
+    this.threshold = o.threshold != null ? o.threshold : 0.8;
+    this.onsetFactor = o.onsetFactor || 2.2;
+    this.margin = o.margin != null ? o.margin : 0.15;
+    this.confirmFrames = o.confirmFrames || 3;
     this.overSub = o.overSub || 1.2;
     this.floorRise = 0.004;
     this.cooldownFrames = Math.round(((o.cooldownMs != null ? o.cooldownMs : 4000) / 1000) * sampleRate / this.hop);
@@ -84,6 +86,7 @@ class AudioSplitter extends AudioWorkletProcessor {
     this.framesSinceOnset = 1e9;
     this.fluxEMA = 1e-4;
     this.aboveCount = 0;
+    this.scoreEMA = 0;
     this.lastScore = 0;
 
     this.recording = false;
@@ -222,12 +225,15 @@ class AudioSplitter extends AudioWorkletProcessor {
     }
     this.lastScore = score;
 
+    // slow baseline of recent scores; a real hit must spike clearly above it
+    this.scoreEMA += (score - this.scoreEMA) * 0.01;
     this.framesSinceTrigger++;
     const recentOnset = this.framesSinceOnset <= 2 * this.T;
-    if (this.detect && score >= this.threshold && recentOnset) this.aboveCount++;
+    const strong = score >= this.threshold && score >= this.scoreEMA + this.margin;
+    if (this.detect && strong && recentOnset) this.aboveCount++;
     else this.aboveCount = 0;
 
-    if (this.detect && this.aboveCount >= 2 && this.framesSinceTrigger >= this.cooldownFrames) {
+    if (this.detect && this.aboveCount >= this.confirmFrames && this.framesSinceTrigger >= this.cooldownFrames) {
       this.framesSinceTrigger = 0;
       this.aboveCount = 0;
       this.port.postMessage({ type: "trigger", score });

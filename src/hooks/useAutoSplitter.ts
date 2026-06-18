@@ -10,7 +10,7 @@ const T_FRAMES = 21; // fixed so built-in templates match regardless of sample r
 const RECORD_MS = 4000;
 const RADIUS = 4;
 const MAX_TEMPLATES = 4;
-const DEFAULT_THRESHOLD = 0.78;
+const DEFAULT_THRESHOLD = 0.8;
 
 export type AutoStatus = "off" | "starting" | "listening" | "error";
 export type CaptureMethod = "device" | "display";
@@ -171,8 +171,10 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
             bands: BANDS,
             templateLen: T_FRAMES,
             radius: RADIUS,
-            onsetFactor: 1.9,
-            cooldownMs: 4000,
+            onsetFactor: 2.2,
+            margin: 0.15,
+            confirmFrames: 3,
+            cooldownMs: 6000,
             threshold,
           },
         });

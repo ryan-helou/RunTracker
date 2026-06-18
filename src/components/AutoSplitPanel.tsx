@@ -159,8 +159,8 @@ export function AutoSplitPanel({
               </div>
               <input
                 type="range"
-                min={0.6}
-                max={0.92}
+                min={0.65}
+                max={0.95}
                 step={0.01}
                 value={as.threshold}
                 onChange={(e) => as.setSensitivity(Number(e.target.value))}
