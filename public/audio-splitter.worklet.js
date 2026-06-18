@@ -1,7 +1,11 @@
-// RunTracker audio auto-splitter — runs on the audio thread (not throttled when
-// the browser tab is backgrounded, so detection keeps working while you're in
-// the game). Computes a normalized log-band spectral fingerprint per frame and
-// matched-filters a live ring buffer against a calibrated template.
+// RunTracker audio auto-splitter (v2) — robust real-time sound detection on the
+// audio thread. Pipeline per frame:
+//   FFT -> log-band magnitudes -> adaptive noise-floor subtraction (kills steady
+//   background music) -> L2-normalized spectral shape + spectral flux (onset).
+// Matching: DTW (tempo/alignment tolerant) against multiple calibrated templates,
+// take the best; only allowed to fire shortly after a spectral onset, must hold
+// for 2 frames, and respects a cooldown. This is far more tolerant of music,
+// timing jitter, and volume than a rigid matched filter.
 
 function fft(re, im) {
   const n = re.length;
@@ -38,9 +42,13 @@ class AudioSplitter extends AudioWorkletProcessor {
     const o = options.processorOptions || {};
     this.fftSize = o.fftSize || 2048;
     this.hop = o.hop || 1024;
-    this.bands = o.bands || 32;
-    this.T = o.templateLen || 24;
-    this.threshold = o.threshold != null ? o.threshold : 0.82;
+    this.bands = o.bands || 40;
+    this.T = o.templateLen || 21;
+    this.radius = o.radius || 4;
+    this.threshold = o.threshold != null ? o.threshold : 0.78;
+    this.onsetFactor = o.onsetFactor || 1.9;
+    this.overSub = o.overSub || 1.2;
+    this.floorRise = 0.004;
     this.cooldownFrames = Math.round(((o.cooldownMs != null ? o.cooldownMs : 4000) / 1000) * sampleRate / this.hop);
     this.recordFrames = Math.round((4 * sampleRate) / this.hop);
 
@@ -57,26 +65,33 @@ class AudioSplitter extends AudioWorkletProcessor {
 
     this.bandEdges = new Int32Array(this.bands + 1);
     const lo = Math.max(1, Math.floor((80 * this.fftSize) / sampleRate));
-    const hi = Math.min(this.fftSize >> 1, Math.floor((12000 * this.fftSize) / sampleRate));
+    const hi = Math.min(this.fftSize >> 1, Math.floor((13000 * this.fftSize) / sampleRate));
     for (let b = 0; b <= this.bands; b++) {
       const f = lo * Math.pow(hi / lo, b / this.bands);
       this.bandEdges[b] = Math.min(this.fftSize >> 1, Math.max(lo, Math.round(f)));
     }
 
+    this.floor = new Float32Array(this.bands);
+    this.cleaned = new Float32Array(this.bands);
+    this.prevCleaned = new Float32Array(this.bands);
+
     this.ring = new Float32Array(this.T * this.bands);
     this.ringFrames = 0;
-    this.template = null;
+
+    this.templates = []; // array of Float32Array(T*bands)
     this.detect = false;
     this.framesSinceTrigger = this.cooldownFrames;
+    this.framesSinceOnset = 1e9;
+    this.fluxEMA = 1e-4;
+    this.aboveCount = 0;
     this.lastScore = 0;
 
     this.recording = false;
     this.recFeat = [];
-    this.recEnergy = [];
+    this.recFlux = [];
     this.recLeft = 0;
 
     this.meterCounter = 0;
-
     this.port.onmessage = (e) => this.onMsg(e.data);
   }
 
@@ -87,12 +102,20 @@ class AudioSplitter extends AudioWorkletProcessor {
     } else if (m.type === "detect") {
       this.detect = !!m.on;
       this.framesSinceTrigger = this.cooldownFrames;
+      this.aboveCount = 0;
     } else if (m.type === "setTemplate") {
-      this.template = m.data ? new Float32Array(m.data) : null;
+      this.templates = [];
+      if (m.data && m.count) {
+        const all = new Float32Array(m.data);
+        const stride = this.T * this.bands;
+        for (let c = 0; c < m.count; c++) {
+          this.templates.push(all.subarray(c * stride, (c + 1) * stride));
+        }
+      }
     } else if (m.type === "record") {
       this.recording = true;
       this.recFeat = [];
-      this.recEnergy = [];
+      this.recFlux = [];
       this.recLeft = this.recordFrames;
     } else if (m.type === "reset") {
       this.ringFrames = 0;
@@ -100,15 +123,41 @@ class AudioSplitter extends AudioWorkletProcessor {
     }
   }
 
-  cosine(a, b) {
-    let dot = 0, na = 0, nb = 0;
-    const n = a.length;
-    for (let i = 0; i < n; i++) {
-      dot += a[i] * b[i];
-      na += a[i] * a[i];
-      nb += b[i] * b[i];
+  // DTW similarity (Sakoe-Chiba band). Frames are L2-normalized, so per-pair
+  // distance = 1 - dot. Returns 1 - (accumulated cost / T) in [0,1].
+  dtwSim(tpl) {
+    const T = this.T, bands = this.bands, r = this.radius, ring = this.ring;
+    const INF = 1e9;
+    if (!this.prevRow || this.prevRow.length !== T) {
+      this.prevRow = new Float64Array(T);
+      this.curRow = new Float64Array(T);
     }
-    return na && nb ? dot / Math.sqrt(na * nb) : 0;
+    let prev = this.prevRow, cur = this.curRow;
+    const dist = (i, j) => {
+      let dot = 0;
+      const a = i * bands, b = j * bands;
+      for (let k = 0; k < bands; k++) dot += ring[a + k] * tpl[b + k];
+      return 1 - dot;
+    };
+    for (let j = 0; j < T; j++) prev[j] = INF;
+    prev[0] = dist(0, 0);
+    for (let j = 1; j <= Math.min(r, T - 1); j++) prev[j] = prev[j - 1] + dist(0, j);
+    for (let i = 1; i < T; i++) {
+      for (let j = 0; j < T; j++) cur[j] = INF;
+      const jlo = Math.max(0, i - r), jhi = Math.min(T - 1, i + r);
+      for (let j = jlo; j <= jhi; j++) {
+        let best = prev[j];
+        if (j > 0) {
+          if (prev[j - 1] < best) best = prev[j - 1];
+          if (cur[j - 1] < best) best = cur[j - 1];
+        }
+        cur[j] = dist(i, j) + best;
+      }
+      const t = prev; prev = cur; cur = t;
+    }
+    this.prevRow = prev; this.curRow = cur;
+    const cost = prev[T - 1];
+    return cost >= INF ? 0 : 1 - Math.min(1, cost / T);
   }
 
   computeFrame() {
@@ -120,29 +169,37 @@ class AudioSplitter extends AudioWorkletProcessor {
     }
     fft(re, im);
     const feat = new Float32Array(this.bands);
-    let energy = 0;
+    let flux = 0;
     for (let b = 0; b < this.bands; b++) {
       let s = 0;
       const a = this.bandEdges[b], c = this.bandEdges[b + 1];
       for (let k = a; k < c; k++) s += Math.sqrt(re[k] * re[k] + im[k] * im[k]);
-      energy += s;
-      feat[b] = Math.log1p(s);
+      // adaptive noise floor: drops instantly, rises slowly toward steady level
+      if (s < this.floor[b]) this.floor[b] = s;
+      else this.floor[b] += (s - this.floor[b]) * this.floorRise;
+      let cl = s - this.floor[b] * this.overSub;
+      if (cl < 0) cl = 0;
+      const d = cl - this.prevCleaned[b];
+      if (d > 0) flux += d;
+      this.cleaned[b] = cl;
+      feat[b] = Math.log1p(cl);
     }
     let norm = 0;
     for (let i = 0; i < this.bands; i++) norm += feat[i] * feat[i];
     norm = Math.sqrt(norm) || 1;
     for (let i = 0; i < this.bands; i++) feat[i] /= norm;
-    return { feat, energy };
+    this.prevCleaned.set(this.cleaned);
+    return { feat, flux };
   }
 
-  pushFrame(feat, energy) {
+  pushFrame(feat, flux) {
     this.ring.copyWithin(0, this.bands);
     this.ring.set(feat, (this.T - 1) * this.bands);
     if (this.ringFrames < this.T) this.ringFrames++;
 
     if (this.recording) {
       this.recFeat.push(feat);
-      this.recEnergy.push(energy);
+      this.recFlux.push(flux);
       this.recLeft--;
       if (this.recLeft <= 0) {
         this.recording = false;
@@ -150,25 +207,42 @@ class AudioSplitter extends AudioWorkletProcessor {
       }
     }
 
-    this.framesSinceTrigger++;
-    if (this.template && this.ringFrames >= this.T && this.template.length === this.ring.length) {
-      const score = this.cosine(this.ring, this.template);
-      this.lastScore = score;
-      if (this.detect && score >= this.threshold && this.framesSinceTrigger >= this.cooldownFrames) {
-        this.framesSinceTrigger = 0;
-        this.port.postMessage({ type: "trigger", score });
+    // onset detection (spectral flux above a slow baseline)
+    const onset = flux > this.fluxEMA * this.onsetFactor + 1e-5;
+    this.fluxEMA = Math.max(1e-6, this.fluxEMA + (flux - this.fluxEMA) * 0.02);
+    this.framesSinceOnset = onset ? 0 : this.framesSinceOnset + 1;
+
+    // best-template DTW score
+    let score = 0;
+    if (this.ringFrames >= this.T && this.templates.length) {
+      for (let t = 0; t < this.templates.length; t++) {
+        const s = this.dtwSim(this.templates[t]);
+        if (s > score) score = s;
       }
+    }
+    this.lastScore = score;
+
+    this.framesSinceTrigger++;
+    const recentOnset = this.framesSinceOnset <= 2 * this.T;
+    if (this.detect && score >= this.threshold && recentOnset) this.aboveCount++;
+    else this.aboveCount = 0;
+
+    if (this.detect && this.aboveCount >= 2 && this.framesSinceTrigger >= this.cooldownFrames) {
+      this.framesSinceTrigger = 0;
+      this.aboveCount = 0;
+      this.port.postMessage({ type: "trigger", score });
     }
   }
 
   finishRecording() {
     const frames = this.recFeat.length;
-    if (frames < this.T) return; // not enough captured
-    let peak = 0, pe = -1;
+    if (frames < this.T) return;
+    // anchor the template at the strongest spectral onset (jingle start)
+    let onset = 0, mx = -1;
     for (let i = 0; i < frames; i++) {
-      if (this.recEnergy[i] > pe) { pe = this.recEnergy[i]; peak = i; }
+      if (this.recFlux[i] > mx) { mx = this.recFlux[i]; onset = i; }
     }
-    const start = Math.max(0, Math.min(frames - this.T, peak - (this.T >> 2)));
+    const start = Math.max(0, Math.min(frames - this.T, onset - 2));
     const out = new Float32Array(this.T * this.bands);
     for (let f = 0; f < this.T; f++) out.set(this.recFeat[start + f], f * this.bands);
     this.port.postMessage({ type: "sample", data: out }, [out.buffer]);
@@ -189,8 +263,8 @@ class AudioSplitter extends AudioWorkletProcessor {
         this.sinceFrame++;
         if (this.sinceFrame >= this.hop && this.filled >= this.fftSize) {
           this.sinceFrame = 0;
-          const { feat, energy } = this.computeFrame();
-          this.pushFrame(feat, energy);
+          const { feat, flux } = this.computeFrame();
+          this.pushFrame(feat, flux);
         }
       }
       this.meterCounter += len;

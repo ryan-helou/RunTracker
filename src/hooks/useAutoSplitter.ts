@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const BANDS = 32;
+const BANDS = 40;
 const FFT = 2048;
 const HOP = 1024;
-const TEMPLATE_MS = 520;
+const TEMPLATE_MS = 450;
 const RECORD_MS = 4000;
+const RADIUS = 4;
+const MAX_TEMPLATES = 4;
+const DEFAULT_THRESHOLD = 0.78;
 
 export type AutoStatus = "off" | "starting" | "listening" | "error";
 export type CaptureMethod = "device" | "display";
@@ -14,6 +17,7 @@ export type CaptureMethod = "device" | "display";
 interface StoredTemplate {
   T: number;
   bands: number;
+  count: number;
   data: number[];
 }
 
@@ -45,7 +49,7 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   const ctxRef = useRef<AudioContext | null>(null);
   const nodeRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const tRef = useRef<number>(Math.round((TEMPLATE_MS / 1000) * 48000) / HOP);
+  const tRef = useRef<number>(Math.round((TEMPLATE_MS / 1000) * 48000 / HOP));
   const samplesRef = useRef<Float32Array[]>([]);
   const recTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -53,21 +57,22 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
   const [score, setScore] = useState(0);
-  const [threshold, setThreshold] = useState(0.82);
+  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [detecting, setDetecting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [sampleCount, setSampleCount] = useState(0);
   const [template, setTemplate] = useState<StoredTemplate | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
 
-  const tplKey = `rt_autotemplate:${gameKey}`;
+  const tplKey = `rt_autotemplate_v2:${gameKey}`;
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(tplKey);
       if (raw) {
         const parsed = JSON.parse(raw) as StoredTemplate;
-        if (parsed && Array.isArray(parsed.data)) setTemplate(parsed);
+        if (parsed && Array.isArray(parsed.data) && parsed.count > 0) setTemplate(parsed);
+        else setTemplate(null);
       } else {
         setTemplate(null);
       }
@@ -76,19 +81,22 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     }
   }, [tplKey]);
 
-  const handleMsg = useCallback((m: { type: string; level?: number; score?: number; data?: ArrayBuffer | number[] }) => {
-    if (m.type === "meter") {
-      setLevel(m.level ?? 0);
-      setScore(m.score ?? 0);
-    } else if (m.type === "trigger") {
-      onTriggerRef.current();
-    } else if (m.type === "sample" && m.data) {
-      samplesRef.current.push(new Float32Array(m.data as ArrayBuffer));
-      setSampleCount(samplesRef.current.length);
-      setRecording(false);
-      if (recTimer.current) clearTimeout(recTimer.current);
-    }
-  }, []);
+  const handleMsg = useCallback(
+    (m: { type: string; level?: number; score?: number; data?: Float32Array }) => {
+      if (m.type === "meter") {
+        setLevel(m.level ?? 0);
+        setScore(m.score ?? 0);
+      } else if (m.type === "trigger") {
+        onTriggerRef.current();
+      } else if (m.type === "sample" && m.data) {
+        samplesRef.current.push(new Float32Array(m.data));
+        setSampleCount(samplesRef.current.length);
+        setRecording(false);
+        if (recTimer.current) clearTimeout(recTimer.current);
+      }
+    },
+    [],
+  );
 
   const stop = useCallback(() => {
     try {
@@ -111,9 +119,7 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       setDevices(all.filter((d) => d.kind === "audioinput"));
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }, []);
 
   const start = useCallback(
@@ -152,6 +158,8 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
             hop: HOP,
             bands: BANDS,
             templateLen: T,
+            radius: RADIUS,
+            onsetFactor: 1.9,
             cooldownMs: 4000,
             threshold,
           },
@@ -160,15 +168,14 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
 
         const src = ctx.createMediaStreamSource(stream);
         const sink = ctx.createGain();
-        sink.gain.value = 0; // process without playing the captured audio back
+        sink.gain.value = 0;
         src.connect(node);
         node.connect(sink);
         sink.connect(ctx.destination);
         nodeRef.current = node;
 
-        // send a matching template if we have one for this sample rate
-        if (template && template.T === T && template.data.length === T * BANDS) {
-          node.port.postMessage({ type: "setTemplate", data: Float32Array.from(template.data) });
+        if (template && template.T === T && template.count > 0 && template.data.length === template.count * T * BANDS) {
+          node.port.postMessage({ type: "setTemplate", count: template.count, data: Float32Array.from(template.data) });
         }
 
         stream.getAudioTracks()[0].addEventListener("ended", () => stop());
@@ -202,28 +209,20 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
   }, []);
 
   const saveTemplate = useCallback(() => {
-    const samples = samplesRef.current;
-    if (samples.length === 0) return;
+    const kept = samplesRef.current.slice(-MAX_TEMPLATES);
+    if (kept.length === 0) return;
     const T = tRef.current;
-    const len = T * BANDS;
-    const avg = new Float32Array(len);
-    for (const s of samples) for (let i = 0; i < len && i < s.length; i++) avg[i] += s[i];
-    for (let i = 0; i < len; i++) avg[i] /= samples.length;
-    for (let f = 0; f < T; f++) {
-      let n = 0;
-      for (let b = 0; b < BANDS; b++) n += avg[f * BANDS + b] ** 2;
-      n = Math.sqrt(n) || 1;
-      for (let b = 0; b < BANDS; b++) avg[f * BANDS + b] /= n;
-    }
-    const data = Array.from(avg);
-    const stored: StoredTemplate = { T, bands: BANDS, data };
+    const stride = T * BANDS;
+    const all = new Float32Array(kept.length * stride);
+    kept.forEach((s, i) => all.set(s.subarray(0, stride), i * stride));
+    const stored: StoredTemplate = { T, bands: BANDS, count: kept.length, data: Array.from(all) };
     setTemplate(stored);
     samplesRef.current = [];
     setSampleCount(0);
     try {
       localStorage.setItem(tplKey, JSON.stringify(stored));
     } catch {}
-    nodeRef.current?.port.postMessage({ type: "setTemplate", data: avg });
+    nodeRef.current?.port.postMessage({ type: "setTemplate", count: kept.length, data: all });
   }, [tplKey]);
 
   const clearTemplate = useCallback(() => {
@@ -234,7 +233,7 @@ export function useAutoSplitter(gameKey: string, onTrigger: () => void): AutoSpl
     try {
       localStorage.removeItem(tplKey);
     } catch {}
-    nodeRef.current?.port.postMessage({ type: "setTemplate", data: null });
+    nodeRef.current?.port.postMessage({ type: "setTemplate", count: 0, data: null });
   }, [tplKey, setDetect]);
 
   useEffect(() => () => stop(), [stop]);
