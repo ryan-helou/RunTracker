@@ -8,6 +8,7 @@ import { useHotkey } from "@/hooks/useHotkey";
 import { KeybindingsModal } from "./KeybindingsModal";
 import { formatMs, formatDelta } from "@/lib/format";
 import { keyLabel } from "@/lib/keys";
+import { sfx, type SfxName } from "@/lib/sound";
 import type { Comparison } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
@@ -46,6 +47,39 @@ export function RunScreen(props: Props) {
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
   const [isNewPB, setIsNewPB] = useState(false);
 
+  // --- sound ---
+  const soundOnRef = useRef(true);
+  const [soundOn, setSoundOn] = useState(true);
+  const play = useCallback((name: SfxName) => {
+    if (soundOnRef.current) sfx[name]();
+  }, []);
+  const toggleSound = useCallback(() => {
+    setSoundOn((on) => {
+      const next = !on;
+      soundOnRef.current = next;
+      try {
+        localStorage.setItem("rt_sound", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // --- attempt counter (per category, local) ---
+  const attemptsKey = `rt_attempts:${gameKey}:${categoryKey}`;
+  const [attempts, setAttempts] = useState(0);
+
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem("rt_sound");
+      const on = s === null ? true : s === "1";
+      setSoundOn(on);
+      soundOnRef.current = on;
+      const a = parseInt(localStorage.getItem(attemptsKey) || "0", 10);
+      setAttempts(Number.isFinite(a) ? a : 0);
+    } catch {}
+  }, [attemptsKey]);
+
+  // --- comparison ---
   const loadComparison = useCallback(async () => {
     try {
       const res = await fetch(
@@ -54,7 +88,7 @@ export function RunScreen(props: Props) {
       const data = await res.json().catch(() => ({}));
       if (res.ok) setComparison(data.comparison as Comparison);
     } catch {
-      /* offline / db not configured — run still works, no comparison */
+      /* run still works without comparison */
     }
   }, [gameKey, categoryKey]);
 
@@ -62,26 +96,80 @@ export function RunScreen(props: Props) {
     loadComparison();
   }, [loadComparison]);
 
-  // --- input ---
-  const hotkeysOn = !settingsOpen && saveState !== "saving";
-  useHotkey(
-    kb.bindings.split,
-    () => {
-      if (engine.status === "idle") engine.start();
-      else if (engine.status === "running") engine.split();
-    },
-    hotkeysOn,
-  );
-  useHotkey(kb.bindings.undo, () => engine.undo(), hotkeysOn);
-  useHotkey(kb.bindings.skip, () => engine.skip(), hotkeysOn);
-  useHotkey(kb.bindings.pause, () => engine.togglePause(), hotkeysOn);
-  useHotkey(kb.bindings.reset, () => engine.reset(), hotkeysOn && engine.status !== "finished");
-
-  // --- comparison-derived values ---
-  const pbCum = comparison?.pbCumulative ?? [];
-  const golds = comparison?.goldSegments ?? [];
+  const pbCum = useMemo(() => comparison?.pbCumulative ?? [], [comparison]);
+  const golds = useMemo(() => comparison?.goldSegments ?? [], [comparison]);
   const hasPB = (comparison?.pb ?? null) != null;
 
+  // --- reset safety (double-tap) ---
+  const [resetArmed, setResetArmed] = useState(false);
+  const resetArmedRef = useRef(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arm = (v: boolean) => {
+    resetArmedRef.current = v;
+    setResetArmed(v);
+  };
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  // --- actions (wrapped for sound / attempts) ---
+  const handleStart = useCallback(() => {
+    engine.start();
+    arm(false);
+    play("start");
+    setAttempts((a) => {
+      const n = a + 1;
+      try {
+        localStorage.setItem(attemptsKey, String(n));
+      } catch {}
+      return n;
+    });
+  }, [engine, play, attemptsKey]);
+
+  const handleSplit = useCallback(() => {
+    if (engine.status !== "running") return;
+    const i = engine.currentIndex;
+    let prevCum = 0;
+    for (let k = i - 1; k >= 0; k--) {
+      if (engine.splits[k].cumulativeMs != null) {
+        prevCum = engine.splits[k].cumulativeMs as number;
+        break;
+      }
+    }
+    const seg = engine.elapsedMs - prevCum;
+    const g = golds[i] ?? null;
+    const isGold = g == null || seg < g;
+    engine.split();
+    play(isGold ? "gold" : "tick");
+  }, [engine, golds, play]);
+
+  const onSplitKey = useCallback(() => {
+    if (engine.status === "idle") handleStart();
+    else if (engine.status === "running") handleSplit();
+  }, [engine.status, handleStart, handleSplit]);
+
+  const handleReset = useCallback(() => {
+    if (engine.status === "idle") return;
+    if (resetArmedRef.current) {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      arm(false);
+      play("reset");
+      engine.reset();
+    } else {
+      arm(true);
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => arm(false), 2000);
+    }
+  }, [engine, play]);
+
+  const hotkeysOn = !settingsOpen && saveState !== "saving";
+  useHotkey(kb.bindings.split, onSplitKey, hotkeysOn);
+  useHotkey(kb.bindings.skip, () => engine.skip(), hotkeysOn);
+  useHotkey(kb.bindings.undo, () => engine.undo(), hotkeysOn);
+  useHotkey(kb.bindings.pause, () => engine.togglePause(), hotkeysOn);
+  useHotkey(kb.bindings.reset, handleReset, hotkeysOn && engine.status !== "idle");
+
+  // --- overall live delta vs PB ---
   const overallDelta = useMemo(() => {
     if (!comparison) return null;
     let lastIdx = -1;
@@ -102,6 +190,33 @@ export function RunScreen(props: Props) {
     return base;
   }, [comparison, engine.splits, engine.status, engine.currentIndex, engine.elapsedMs, pbCum]);
 
+  // --- best possible time (current pace + golds for remaining splits) ---
+  const bestPossible = useMemo(() => {
+    if (golds.length === 0) return null;
+    let lastCum = 0;
+    let lastIdx = -1;
+    for (let i = 0; i < engine.splits.length; i++) {
+      if (engine.splits[i].cumulativeMs != null) {
+        lastCum = engine.splits[i].cumulativeMs as number;
+        lastIdx = i;
+      }
+    }
+    let sum = lastCum;
+    for (let i = lastIdx + 1; i < splitNames.length; i++) {
+      const g = golds[i];
+      if (g == null) return null;
+      sum += g;
+    }
+    return sum;
+  }, [golds, engine.splits, splitNames.length]);
+
+  const pbTotal = comparison?.pb?.totalMs ?? null;
+  const saveVsPb = useMemo(() => {
+    if (bestPossible == null || pbTotal == null) return null;
+    return bestPossible - pbTotal; // negative = BPT beats PB
+  }, [bestPossible, pbTotal]);
+  const saveVsPbFmt = formatDelta(saveVsPb);
+
   const tone =
     engine.status === "idle"
       ? "idle"
@@ -110,15 +225,10 @@ export function RunScreen(props: Props) {
         : overallDelta < 0
           ? "ahead"
           : "behind";
-
   const timerColor =
     tone === "ahead" ? "text-ahead" : tone === "behind" ? "text-behind" : "text-accent";
   const timerGlow =
-    tone === "ahead"
-      ? "timer-glow-ahead"
-      : tone === "behind"
-        ? "timer-glow-behind"
-        : "timer-glow";
+    tone === "ahead" ? "timer-glow-ahead" : tone === "behind" ? "timer-glow-behind" : "timer-glow";
 
   const [clockMain, clockCs] = formatMs(engine.elapsedMs).split(".");
   const overallDeltaFmt = formatDelta(overallDelta);
@@ -129,8 +239,7 @@ export function RunScreen(props: Props) {
     let total: number | null = null;
     for (const sp of engine.splits) if (sp.cumulativeMs != null) total = sp.cumulativeMs;
     const completed =
-      engine.splits.length > 0 &&
-      engine.splits[engine.splits.length - 1].cumulativeMs != null;
+      engine.splits.length > 0 && engine.splits[engine.splits.length - 1].cumulativeMs != null;
     const prevPB = comparison?.pb?.totalMs ?? null;
     try {
       const res = await fetch("/api/runs", {
@@ -143,19 +252,22 @@ export function RunScreen(props: Props) {
         setSaveState("error");
         return;
       }
+      const newPB = completed && total != null && (prevPB == null || total < prevPB);
       setSavedRunId(data.run.id);
-      setIsNewPB(completed && total != null && (prevPB == null || total < prevPB));
+      setIsNewPB(newPB);
       setSaveState("saved");
+      play(newPB ? "pb" : "tick");
       loadComparison();
     } catch {
       setSaveState("error");
     }
-  }, [engine.splits, comparison, gameKey, categoryKey, loadComparison]);
+  }, [engine.splits, comparison, gameKey, categoryKey, loadComparison, play]);
 
   const newRun = useCallback(() => {
     setSaveState("idle");
     setSavedRunId(null);
     setIsNewPB(false);
+    arm(false);
     engine.reset();
   }, [engine]);
 
@@ -165,36 +277,47 @@ export function RunScreen(props: Props) {
     currentRowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [engine.currentIndex]);
 
+  // --- fullscreen ---
+  const [isFs, setIsFs] = useState(false);
+  useEffect(() => {
+    const h = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", h);
+    return () => document.removeEventListener("fullscreenchange", h);
+  }, []);
+  const toggleFs = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else document.documentElement.requestFullscreen?.();
+  }, []);
+
   const finished = engine.status === "finished";
+  const iconBtn =
+    "rounded-lg border border-line px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-line-bright hover:text-fg ring-focus";
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-5 py-5">
       {/* header */}
       <div className="flex items-center justify-between">
-        <Link
-          href="/dashboard"
-          className="text-sm text-muted transition-colors hover:text-fg"
-        >
+        <Link href="/dashboard" className="text-sm text-muted transition-colors hover:text-fg">
           ← Dashboard
         </Link>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="rounded-lg border border-line px-3 py-1.5 text-xs text-muted transition-colors hover:border-line-bright hover:text-fg ring-focus"
-        >
-          ⌨ Keys
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={toggleSound} className={iconBtn} title={soundOn ? "Mute" : "Unmute"}>
+            {soundOn ? "🔊" : "🔇"}
+          </button>
+          <button onClick={toggleFs} className={iconBtn} title="Fullscreen">
+            {isFs ? "⤢" : "⛶"}
+          </button>
+          <button onClick={() => setSettingsOpen(true)} className={iconBtn}>
+            ⌨ Keys
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 flex items-baseline gap-2.5">
-        <span
-          className="text-xs font-bold tracking-widest"
-          style={{ color: accent }}
-        >
+        <span className="text-xs font-bold tracking-widest" style={{ color: accent }}>
           {gameShort}
         </span>
-        <h1 className="text-lg font-semibold tracking-tight text-fg">
-          {categoryName}
-        </h1>
+        <h1 className="text-lg font-semibold tracking-tight text-fg">{categoryName}</h1>
         <span className="ml-auto rounded border border-line px-2 py-0.5 text-[0.6rem] text-faint">
           {timingMethod}
         </span>
@@ -229,33 +352,44 @@ export function RunScreen(props: Props) {
       </div>
 
       {/* stats */}
-      <div className="mt-3 grid grid-cols-3 gap-3">
-        {[
-          { label: "Personal Best", value: formatMs(comparison?.pb?.totalMs ?? null) },
-          { label: "Sum of Best", value: formatMs(comparison?.sumOfBest ?? null) },
-          { label: "Runs", value: String(comparison?.runCount ?? 0) },
-        ].map((stat) => (
-          <div key={stat.label} className="panel px-3 py-2.5 text-center">
-            <div className="mono text-sm font-semibold text-fg">{stat.value}</div>
-            <div className="text-[0.6rem] uppercase tracking-wider text-faint">
-              {stat.label}
-            </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="panel px-3 py-2.5 text-center">
+          <div className="mono text-sm font-semibold text-fg">{formatMs(pbTotal)}</div>
+          <div className="text-[0.6rem] uppercase tracking-wider text-faint">Personal Best</div>
+        </div>
+        <div className="panel px-3 py-2.5 text-center">
+          <div className="mono text-sm font-semibold text-best">{formatMs(bestPossible)}</div>
+          <div className="text-[0.6rem] uppercase tracking-wider text-faint">
+            Best Possible
+            {saveVsPbFmt && (
+              <span className={cn("ml-1 mono", saveVsPbFmt.ahead ? "text-ahead" : "text-behind")}>
+                {saveVsPbFmt.text}
+              </span>
+            )}
           </div>
-        ))}
+        </div>
+        <div className="panel px-3 py-2.5 text-center">
+          <div className="mono text-sm font-semibold text-gold">{formatMs(comparison?.sumOfBest ?? null)}</div>
+          <div className="text-[0.6rem] uppercase tracking-wider text-faint">Sum of Best</div>
+        </div>
+        <div className="panel px-3 py-2.5 text-center">
+          <div className="mono text-sm font-semibold text-fg">#{attempts}</div>
+          <div className="text-[0.6rem] uppercase tracking-wider text-faint">
+            Attempt · {comparison?.runCount ?? 0} saved
+          </div>
+        </div>
       </div>
 
       {/* splits */}
       <ul className="mt-3 flex max-h-[42vh] flex-col gap-0.5 overflow-y-auto pr-1">
         {engine.splits.map((sp, i) => {
           const isCurrent =
-            (engine.status === "running" || engine.status === "paused") &&
-            i === engine.currentIndex;
+            (engine.status === "running" || engine.status === "paused") && i === engine.currentIndex;
           const recorded = sp.cumulativeMs != null;
           const pc = pbCum[i] ?? null;
           const delta = recorded && pc != null ? (sp.cumulativeMs as number) - pc : null;
           const gseg = golds[i] ?? null;
-          const isGold =
-            recorded && sp.segmentMs != null && (gseg == null || sp.segmentMs < gseg);
+          const isGold = recorded && sp.segmentMs != null && (gseg == null || sp.segmentMs < gseg);
           const deltaFmt = formatDelta(delta);
 
           let liveDelta: number | null = null;
@@ -278,9 +412,7 @@ export function RunScreen(props: Props) {
               ref={isCurrent ? currentRowRef : null}
               className={cn(
                 "flex items-center gap-3 rounded-lg border px-3.5 py-2.5 transition-colors",
-                isCurrent
-                  ? "border-accent/60 bg-[rgba(255,178,36,0.07)]"
-                  : "border-transparent",
+                isCurrent ? "border-accent/60 bg-[rgba(255,178,36,0.07)]" : "border-transparent",
                 isGold && "flash-gold",
               )}
             >
@@ -304,9 +436,7 @@ export function RunScreen(props: Props) {
 
               <span className="mono w-20 shrink-0 text-right text-sm font-semibold">
                 {deltaFmt ? (
-                  <span className={deltaFmt.ahead ? "text-ahead" : "text-behind"}>
-                    {deltaFmt.text}
-                  </span>
+                  <span className={deltaFmt.ahead ? "text-ahead" : "text-behind"}>{deltaFmt.text}</span>
                 ) : liveFmt ? (
                   <span className="text-behind/80">{liveFmt.text}</span>
                 ) : (
@@ -336,9 +466,7 @@ export function RunScreen(props: Props) {
                 <p className="font-semibold text-fg">
                   {isNewPB ? "🏆 New personal best!" : "Run saved"}
                 </p>
-                <p className="mono text-sm text-muted">
-                  {formatMs(comparison?.pb?.totalMs ?? null)}
-                </p>
+                <p className="mono text-sm text-muted">{formatMs(comparison?.pb?.totalMs ?? null)}</p>
               </div>
               <div className="flex gap-2">
                 {savedRunId != null && (
@@ -389,7 +517,7 @@ export function RunScreen(props: Props) {
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {engine.status === "idle" && (
           <button
-            onClick={engine.start}
+            onClick={handleStart}
             className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-accent text-base font-semibold text-ink hover:brightness-110 ring-focus"
           >
             Start run <Kbd code={kb.bindings.split} />
@@ -399,25 +527,25 @@ export function RunScreen(props: Props) {
         {engine.status === "running" && (
           <>
             <button
-              onClick={engine.split}
+              onClick={handleSplit}
               className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-lg bg-accent text-base font-semibold text-ink hover:brightness-110 ring-focus"
             >
               Split <Kbd code={kb.bindings.split} />
             </button>
             <button
-              onClick={engine.skip}
+              onClick={() => engine.skip()}
               className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg border border-line text-sm text-fg hover:border-line-bright"
             >
               Skip <Kbd code={kb.bindings.skip} />
             </button>
             <button
-              onClick={engine.undo}
+              onClick={() => engine.undo()}
               className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg border border-line text-sm text-fg hover:border-line-bright"
             >
               Undo <Kbd code={kb.bindings.undo} />
             </button>
             <button
-              onClick={engine.togglePause}
+              onClick={() => engine.togglePause()}
               className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg border border-line text-sm text-fg hover:border-line-bright"
             >
               Pause <Kbd code={kb.bindings.pause} />
@@ -428,33 +556,32 @@ export function RunScreen(props: Props) {
         {engine.status === "paused" && (
           <>
             <button
-              onClick={engine.resume}
+              onClick={() => engine.resume()}
               className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-lg bg-accent text-base font-semibold text-ink hover:brightness-110 ring-focus"
             >
               Resume <Kbd code={kb.bindings.pause} />
-            </button>
-            <button
-              onClick={engine.reset}
-              className="flex h-12 flex-1 items-center justify-center rounded-lg border border-line text-sm text-muted hover:border-line-bright hover:text-fg"
-            >
-              Reset
             </button>
           </>
         )}
 
         {(engine.status === "running" || engine.status === "paused") && (
           <button
-            onClick={engine.reset}
+            onClick={handleReset}
             title="Reset run"
-            className="flex h-12 items-center justify-center gap-2 rounded-lg border border-[rgba(255,93,93,0.4)] px-4 text-sm text-behind hover:bg-[rgba(255,93,93,0.1)]"
+            className={cn(
+              "flex h-12 items-center justify-center gap-2 rounded-lg border px-4 text-sm transition-colors",
+              resetArmed
+                ? "border-behind bg-[rgba(255,93,93,0.16)] text-behind"
+                : "border-[rgba(255,93,93,0.4)] text-behind hover:bg-[rgba(255,93,93,0.1)]",
+            )}
           >
-            Reset <Kbd code={kb.bindings.reset} />
+            {resetArmed ? "Press again to reset" : "Reset"} <Kbd code={kb.bindings.reset} />
           </button>
         )}
 
         {finished && (
           <button
-            onClick={engine.undo}
+            onClick={() => engine.undo()}
             className="flex h-11 items-center justify-center gap-2 rounded-lg border border-line px-4 text-sm text-muted hover:border-line-bright hover:text-fg"
           >
             Undo last split <Kbd code={kb.bindings.undo} />
@@ -464,7 +591,8 @@ export function RunScreen(props: Props) {
 
       <p className="mt-3 text-center text-[0.7rem] text-faint">
         Keep this window focused for key input · press{" "}
-        <span className="text-muted">{keyLabel(kb.bindings.split)}</span> to split
+        <span className="text-muted">{keyLabel(kb.bindings.split)}</span> to split · double-tap{" "}
+        <span className="text-muted">{keyLabel(kb.bindings.reset)}</span> to reset
       </p>
 
       <KeybindingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} kb={kb} />
