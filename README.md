@@ -17,7 +17,11 @@ a small custom username/password auth layer. Designed to deploy on **Vercel**.
   cumulative time and the per-segment time is derived from it (LiveSplit model).
 - **Pace vs. Personal Best** — per-split ± deltas (green ahead / red behind), a
   live overall delta on the main clock, **gold-split** highlighting for new best
-  segments, plus **Sum of Best**.
+  segments, live **Best Possible Time** (current pace + golds for the rest) with
+  possible-save-vs-PB, **Sum of Best**, and a per-category **attempt counter**.
+- **Game feel** — synthesized **sound cues** (split / gold / new-PB / reset) with
+  a mute toggle, **fullscreen focus mode**, and **double-tap reset** so an
+  accidental keypress can't nuke a run.
 - **Rebindable keys** — bind *any* physical key to Split, Undo, Skip,
   Pause/Resume, and Reset (stored per browser).
 - **During-run controls** — start, split, skip a split, undo (step back / re-open
