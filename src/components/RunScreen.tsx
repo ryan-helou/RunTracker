@@ -395,81 +395,99 @@ export function RunScreen(props: Props) {
         </div>
       </div>
 
-      {/* splits */}
-      <ul className="mt-3 flex max-h-[42vh] flex-col gap-0.5 overflow-y-auto pr-1">
-        {engine.splits.map((sp, i) => {
-          const isCurrent =
-            (engine.status === "running" || engine.status === "paused") && i === engine.currentIndex;
-          const recorded = sp.cumulativeMs != null;
-          const pc = pbCum[i] ?? null;
-          const delta = recorded && pc != null ? (sp.cumulativeMs as number) - pc : null;
-          const gseg = golds[i] ?? null;
-          const isGold = recorded && sp.segmentMs != null && (gseg == null || sp.segmentMs < gseg);
-          const deltaFmt = formatDelta(delta);
+      {/* splits — per-level (segment) times */}
+      <div className="mt-3 flex items-center gap-3 px-3.5 text-[0.58rem] uppercase tracking-wider text-faint">
+        <span className="w-6 shrink-0" />
+        <span className="flex-1">Split</span>
+        <span className="w-20 shrink-0 text-right">Δ PB</span>
+        <span className="w-24 shrink-0 text-right">Level time</span>
+      </div>
+      <ul className="mt-1 flex max-h-[42vh] flex-col gap-0.5 overflow-y-auto pr-1">
+        {(() => {
+          let lastCum = 0;
+          let lastPb = 0;
+          return engine.splits.map((sp, i) => {
+            const isCurrent =
+              (engine.status === "running" || engine.status === "paused") && i === engine.currentIndex;
+            const recorded = sp.cumulativeMs != null;
+            const pc = pbCum[i] ?? null;
+            const delta = recorded && pc != null ? (sp.cumulativeMs as number) - pc : null;
+            const gseg = golds[i] ?? null;
+            const isGold = recorded && sp.segmentMs != null && (gseg == null || sp.segmentMs < gseg);
+            const deltaFmt = formatDelta(delta);
 
-          let liveDelta: number | null = null;
-          if (isCurrent && engine.status === "running" && pc != null && engine.elapsedMs > pc) {
-            liveDelta = engine.elapsedMs - pc;
-          }
-          const liveFmt = formatDelta(liveDelta);
+            let liveDelta: number | null = null;
+            if (isCurrent && engine.status === "running" && pc != null && engine.elapsedMs > pc) {
+              liveDelta = engine.elapsedMs - pc;
+            }
+            const liveFmt = formatDelta(liveDelta);
 
-          const timeText = recorded
-            ? formatMs(sp.cumulativeMs)
-            : isCurrent && engine.status === "running"
-              ? formatMs(engine.elapsedMs)
-              : sp.skipped
-                ? "—"
-                : formatMs(pc);
+            // per-level (segment) time
+            const liveRunning = isCurrent && engine.status === "running";
+            const pbSeg = pc != null ? pc - lastPb : null;
+            const segMs = recorded ? sp.segmentMs : liveRunning ? engine.elapsedMs - lastCum : null;
+            const timeText =
+              recorded || liveRunning
+                ? formatMs(segMs)
+                : sp.skipped
+                  ? "—"
+                  : pbSeg != null
+                    ? formatMs(pbSeg)
+                    : "—";
 
-          return (
-            <li
-              key={i}
-              ref={isCurrent ? currentRowRef : null}
-              className={cn(
-                "flex items-center gap-3 rounded-lg border px-3.5 py-2.5 transition-colors",
-                isCurrent ? "border-accent/60 bg-[rgba(255,178,36,0.07)]" : "border-transparent",
-                isGold && "flash-gold",
-              )}
-            >
-              <span className="mono w-6 shrink-0 text-xs text-faint">
-                {String(i + 1).padStart(2, "0")}
-              </span>
-              <span className="flex min-w-0 flex-1 items-center gap-2">
-                {isGold && (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold shadow-[0_0_8px_var(--color-gold)]" />
-                )}
-                <span
-                  className={cn(
-                    "truncate text-sm",
-                    isCurrent ? "font-semibold text-fg" : "text-fg/90",
-                    sp.skipped && "text-faint line-through",
-                  )}
-                >
-                  {sp.name}
-                </span>
-              </span>
+            if (recorded) lastCum = sp.cumulativeMs as number;
+            if (pc != null) lastPb = pc;
 
-              <span className="mono w-20 shrink-0 text-right text-sm font-semibold">
-                {deltaFmt ? (
-                  <span className={deltaFmt.ahead ? "text-ahead" : "text-behind"}>{deltaFmt.text}</span>
-                ) : liveFmt ? (
-                  <span className="text-behind/80">{liveFmt.text}</span>
-                ) : (
-                  <span className="text-faint">·</span>
-                )}
-              </span>
-
-              <span
+            return (
+              <li
+                key={i}
+                ref={isCurrent ? currentRowRef : null}
                 className={cn(
-                  "mono w-24 shrink-0 text-right text-sm",
-                  isGold ? "text-gold" : recorded ? "text-fg" : "text-faint",
+                  "flex items-center gap-3 rounded-lg border px-3.5 py-2.5 transition-colors",
+                  isCurrent ? "border-accent/60 bg-[rgba(255,178,36,0.07)]" : "border-transparent",
+                  isGold && "flash-gold",
                 )}
               >
-                {timeText}
-              </span>
-            </li>
-          );
-        })}
+                <span className="mono w-6 shrink-0 text-xs text-faint">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  {isGold && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold shadow-[0_0_8px_var(--color-gold)]" />
+                  )}
+                  <span
+                    className={cn(
+                      "truncate text-sm",
+                      isCurrent ? "font-semibold text-fg" : "text-fg/90",
+                      sp.skipped && "text-faint line-through",
+                    )}
+                  >
+                    {sp.name}
+                  </span>
+                </span>
+
+                <span className="mono w-20 shrink-0 text-right text-sm font-semibold">
+                  {deltaFmt ? (
+                    <span className={deltaFmt.ahead ? "text-ahead" : "text-behind"}>{deltaFmt.text}</span>
+                  ) : liveFmt ? (
+                    <span className="text-behind/80">{liveFmt.text}</span>
+                  ) : (
+                    <span className="text-faint">·</span>
+                  )}
+                </span>
+
+                <span
+                  className={cn(
+                    "mono w-24 shrink-0 text-right text-sm",
+                    isGold ? "text-gold" : recorded || liveRunning ? "text-fg" : "text-faint",
+                  )}
+                >
+                  {timeText}
+                </span>
+              </li>
+            );
+          });
+        })()}
       </ul>
 
       {/* finish / save panel */}
