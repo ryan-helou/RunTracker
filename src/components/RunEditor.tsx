@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatMs, formatDelta, formatDate, parseTimeToMs } from "@/lib/format";
 import type { RunRecord, RunSplit, Comparison } from "@/lib/types";
+import { cn } from "@/lib/cn";
 
 interface Row {
   name: string;
@@ -35,6 +36,8 @@ export function RunEditor({
   );
   const [note, setNote] = useState(run.note);
   const [completed, setCompleted] = useState(run.completed);
+  const [name, setName] = useState(run.name);
+  const [mode, setMode] = useState<"solo" | "coop">(run.mode === "coop" ? "coop" : "solo");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +82,7 @@ export function RunEditor({
       const res = await fetch(`/api/runs/${run.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ splits: payload, note, completed }),
+        body: JSON.stringify({ splits: payload, note, completed, name: name.trim(), mode }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -190,10 +193,20 @@ export function RunEditor({
         })}
       </ul>
 
-      {/* note + completed */}
+      {/* details */}
       <div className="mt-4 flex flex-col gap-3">
         <label className="flex flex-col gap-1.5">
-          <span className="eyebrow">Note</span>
+          <span className="eyebrow">Run name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            placeholder="Untitled run"
+            className="h-11 rounded-lg border border-line bg-surface-2 px-3.5 text-sm text-fg placeholder:text-faint ring-focus"
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="eyebrow">Description</span>
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -202,6 +215,26 @@ export function RunEditor({
             className="rounded-lg border border-line bg-surface-2 px-3.5 py-2.5 text-sm text-fg placeholder:text-faint ring-focus"
           />
         </label>
+        {run.gameKey === "nsmbw" && (
+          <div className="flex items-center gap-2">
+            <span className="eyebrow mr-1">Mode</span>
+            {(["solo", "coop"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cn(
+                  "rounded-md border px-3 py-1.5 text-sm transition-colors",
+                  mode === m
+                    ? "border-accent bg-[rgba(255,178,36,0.12)] text-accent"
+                    : "border-line text-muted hover:text-fg",
+                )}
+              >
+                {m === "solo" ? "Solo" : "Co-op"}
+              </button>
+            ))}
+          </div>
+        )}
         <label className="flex items-center gap-2.5 text-sm text-fg">
           <input
             type="checkbox"

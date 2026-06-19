@@ -20,6 +20,8 @@ export interface RunRecord {
   completed: boolean;
   splits: RunSplit[];
   note: string;
+  name: string;
+  mode: "solo" | "coop";
   createdAt: string;
 }
 

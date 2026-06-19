@@ -191,13 +191,23 @@ export function DashboardClient({
                               PB
                             </span>
                           )}
+                          {r.mode === "coop" && (
+                            <span className="rounded bg-[rgba(109,184,255,0.15)] px-1.5 py-0.5 text-[0.6rem] font-semibold text-best">
+                              CO-OP
+                            </span>
+                          )}
                           {!r.completed && (
                             <span className="text-[0.6rem] text-faint">incomplete</span>
                           )}
                         </div>
                         <div className="truncate text-sm text-fg">
-                          {cat?.name ?? r.categoryKey}
+                          {r.name || cat?.name || r.categoryKey}
                         </div>
+                        {r.name && (
+                          <div className="truncate text-[0.65rem] text-faint">
+                            {cat?.name ?? r.categoryKey}
+                          </div>
+                        )}
                       </div>
                       <div className="shrink-0 text-right">
                         <div className="mono text-sm font-semibold text-fg">
