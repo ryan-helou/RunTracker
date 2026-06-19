@@ -50,6 +50,9 @@ export function RunScreen(props: Props) {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
   const [isNewPB, setIsNewPB] = useState(false);
+  const [runName, setRunName] = useState("");
+  const [runDesc, setRunDesc] = useState("");
+  const [runMode, setRunMode] = useState<"solo" | "coop">("solo");
 
   // --- sound ---
   const soundOnRef = useRef(true);
@@ -251,7 +254,15 @@ export function RunScreen(props: Props) {
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gameKey, categoryKey, completed, splits: engine.splits }),
+        body: JSON.stringify({
+          gameKey,
+          categoryKey,
+          completed,
+          splits: engine.splits,
+          name: runName.trim(),
+          note: runDesc.trim(),
+          mode: runMode,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -267,12 +278,15 @@ export function RunScreen(props: Props) {
     } catch {
       setSaveState("error");
     }
-  }, [engine.splits, comparison, gameKey, categoryKey, loadComparison, play]);
+  }, [engine.splits, comparison, gameKey, categoryKey, loadComparison, play, runName, runDesc, runMode]);
 
   const newRun = useCallback(() => {
     setSaveState("idle");
     setSavedRunId(null);
     setIsNewPB(false);
+    setRunName("");
+    setRunDesc("");
+    setRunMode("solo");
     arm(false);
     engine.reset();
   }, [engine]);
@@ -519,14 +533,45 @@ export function RunScreen(props: Props) {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
-              <div className="text-center sm:text-left">
-                <p className="font-semibold text-fg">Run complete</p>
-                {saveState === "error" && (
-                  <p className="text-sm text-behind">Couldn&apos;t save — check the DB.</p>
-                )}
-              </div>
-              <div className="flex gap-2">
+            <div className="flex flex-col gap-3">
+              <p className="font-semibold text-fg">Run complete — save it?</p>
+              <input
+                value={runName}
+                onChange={(e) => setRunName(e.target.value)}
+                placeholder="Run name (optional)"
+                maxLength={120}
+                className="h-10 rounded-lg border border-line bg-surface-2 px-3.5 text-sm text-fg placeholder:text-faint ring-focus"
+              />
+              <textarea
+                value={runDesc}
+                onChange={(e) => setRunDesc(e.target.value)}
+                rows={2}
+                placeholder="Description (optional)"
+                className="rounded-lg border border-line bg-surface-2 px-3.5 py-2 text-sm text-fg placeholder:text-faint ring-focus"
+              />
+              {gameKey === "nsmbw" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted">Mode:</span>
+                  {(["solo", "coop"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setRunMode(m)}
+                      className={cn(
+                        "rounded-md border px-3 py-1.5 text-sm transition-colors",
+                        runMode === m
+                          ? "border-accent bg-[rgba(255,178,36,0.12)] text-accent"
+                          : "border-line text-muted hover:text-fg",
+                      )}
+                    >
+                      {m === "solo" ? "Solo" : "Co-op"}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {saveState === "error" && (
+                <p className="text-sm text-behind">Couldn&apos;t save — check the DB.</p>
+              )}
+              <div className="flex justify-end gap-2">
                 <button
                   onClick={newRun}
                   className="rounded-lg border border-line px-4 py-2 text-sm text-muted hover:border-line-bright hover:text-fg"

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
-import { mapRun, sanitizeSplits, totalFromSplits } from "@/lib/runs";
+import { mapRun, sanitizeSplits, totalFromSplits, sanitizeMode } from "@/lib/runs";
 import { getCategory } from "@/lib/catalog";
 import { unauthorized, badRequest, serverError } from "@/lib/api";
 
@@ -57,14 +57,16 @@ export async function POST(req: Request) {
     const splits = sanitizeSplits(body.splits);
     const completed = Boolean(body.completed);
     const note = String(body.note ?? "").slice(0, 2000);
+    const name = String(body.name ?? "").slice(0, 120);
+    const mode = sanitizeMode(body.mode);
     const totalMs = totalFromSplits(splits);
 
     const sql = getSql();
     const rows = await sql`
-      INSERT INTO runs (user_id, game_key, category_key, total_ms, completed, splits, note)
+      INSERT INTO runs (user_id, game_key, category_key, total_ms, completed, splits, note, name, mode)
       VALUES (
         ${session.userId}, ${gameKey}, ${categoryKey},
-        ${totalMs}, ${completed}, ${JSON.stringify(splits)}::jsonb, ${note}
+        ${totalMs}, ${completed}, ${JSON.stringify(splits)}::jsonb, ${note}, ${name}, ${mode}
       )
       RETURNING *
     `;

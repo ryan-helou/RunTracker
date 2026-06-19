@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
-import { mapRun, sanitizeSplits, totalFromSplits } from "@/lib/runs";
+import { mapRun, sanitizeSplits, totalFromSplits, sanitizeMode } from "@/lib/runs";
 import { unauthorized, badRequest, notFound, serverError } from "@/lib/api";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -46,13 +46,17 @@ export async function PATCH(req: Request, { params }: Ctx) {
     const totalMs = splits ? totalFromSplits(splits) : null;
     const note = body.note === undefined ? null : String(body.note).slice(0, 2000);
     const completed = body.completed === undefined ? null : Boolean(body.completed);
+    const name = body.name === undefined ? null : String(body.name).slice(0, 120);
+    const mode = body.mode === undefined ? null : sanitizeMode(body.mode);
 
     const rows = await sql`
       UPDATE runs SET
         splits    = COALESCE(${splits ? JSON.stringify(splits) : null}::jsonb, splits),
         total_ms  = CASE WHEN ${hasSplits} THEN ${totalMs} ELSE total_ms END,
         note      = COALESCE(${note}, note),
-        completed = COALESCE(${completed}, completed)
+        completed = COALESCE(${completed}, completed),
+        name      = COALESCE(${name}, name),
+        mode      = COALESCE(${mode}, mode)
       WHERE id = ${id} AND user_id = ${session.userId}
       RETURNING *
     `;

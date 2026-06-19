@@ -221,14 +221,20 @@ export function StatsClient(props: Props) {
                     href={`/runs/${r.id}`}
                     className="panel flex items-center justify-between gap-3 px-3.5 py-2.5 transition-colors hover:border-line-bright"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       {isPB && (
                         <span className="rounded bg-[rgba(255,210,74,0.15)] px-1.5 py-0.5 text-[0.6rem] font-semibold text-gold">
                           PB
                         </span>
                       )}
+                      {r.mode === "coop" && (
+                        <span className="rounded bg-[rgba(109,184,255,0.15)] px-1.5 py-0.5 text-[0.6rem] font-semibold text-best">
+                          CO-OP
+                        </span>
+                      )}
                       {!r.completed && <span className="text-[0.6rem] text-faint">incomplete</span>}
-                      <span className="text-xs text-muted">{formatDate(r.createdAt)}</span>
+                      {r.name && <span className="truncate text-sm text-fg">{r.name}</span>}
+                      <span className="shrink-0 text-xs text-muted">{formatDate(r.createdAt)}</span>
                     </span>
                     <span className="flex items-center gap-4">
                       {dfmt && !isPB && (

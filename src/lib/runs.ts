@@ -13,9 +13,16 @@ export function mapRun(row: Row): RunRecord {
     completed: Boolean(row.completed),
     splits: Array.isArray(row.splits) ? (row.splits as RunSplit[]) : [],
     note: String(row.note ?? ""),
+    name: String(row.name ?? ""),
+    mode: row.mode === "coop" ? "coop" : "solo",
     createdAt:
       created instanceof Date ? created.toISOString() : String(created ?? ""),
   };
+}
+
+/** Coerces arbitrary input into a valid run mode. */
+export function sanitizeMode(v: unknown): "solo" | "coop" {
+  return v === "coop" ? "coop" : "solo";
 }
 
 /** Coerces arbitrary client input into a safe, bounded RunSplit[]. */
