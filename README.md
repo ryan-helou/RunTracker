@@ -1,12 +1,14 @@
-# RunTracker
+# ⏱️ RunTracker
 
 *A live splits timer for Wii speedruns — the kind of thing you'd run on a second monitor while you play, not a jogging app.*
+
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React-61DAFB?style=flat-square&logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
 
 Despite the name, there's no fitness here. RunTracker is a LiveSplit-style timer for three games: **New Super Mario Bros. Wii**, **Mario Kart Wii**, and **Mario Party 9**. You pick a game and a category, hit Start, and tap a bound key at the end of every level, track, or board. One continuous real-time clock (RTA) runs off `performance.now()`; each split records the cumulative time and the per-segment time is the difference from the split before it. Segments land green when you're ahead of your personal best and red when you're behind, with gold highlighting for a new best-ever segment, a live Sum of Best, and a Best Possible Time that projects your current pace plus golds for whatever's left.
 
 Categories and their split lists live in `src/lib/catalog.ts`, generated from `data/speedrun-research.json` (verified against speedrun.com). Only categories with two or more splits are included — no single individual levels — which comes out to roughly 35 routes: NSMBW's Any%, Cannonless, Low%, 100%, and per-world runs; every Mario Kart Wii cup, the Nitro/Retro halves, the full 32, and 100%; and Mario Party 9's Solo, Party, Boss Rush, and minigame modes.
 
-## Auto-splitting by ear
+## 👂 Auto-splitting by ear
 
 The part worth showing off is the audio auto-splitter, which listens to the game's sound and splits when it hears a level-clear jingle. It runs entirely on an AudioWorklet (`public/audio-splitter.worklet.js`): each frame goes through a 2048-point FFT into 40 log-spaced bands, an adaptive noise floor subtracts steady background music, and the L2-normalized spectral shape is matched with dynamic time warping against up to four calibrated templates. A hit only fires shortly after a spectral-flux onset, must hold for three frames, and respects a cooldown, so the game's music doesn't set it off. NSMBW works with zero calibration thanks to a built-in fingerprint of its course-clear and castle-clear jingles (`scripts/build-default-templates.mjs`); other games learn the sound from a quick one-time recording. Audio comes from a capture-card/input device or a shared browser tab, and the manual key always stays live as a backup. It's marked beta.
 
