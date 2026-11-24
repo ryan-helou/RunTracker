@@ -12,7 +12,7 @@
 
 <br>
 
-Speedrunning means finishing a video game, or part of one, as fast as possible. RunTracker is not a jogging app: it is the stopwatch a speedrunner keeps open on a second screen. It has the routes for New Super Mario Bros. Wii, Mario Kart Wii, and Mario Party 9 built in. You press a key at the end of each level, track, or board, and it shows right away whether you are ahead of or behind your personal best.
+Speedrunning means finishing a video game, or part of one, as fast as possible. RunTracker is the stopwatch a speedrunner keeps open on a second screen. It has the routes for New Super Mario Bros. Wii, Mario Kart Wii, and Mario Party 9 built in. You press a key at the end of each level, track, or board, and it shows right away whether you are ahead of or behind your personal best.
 
 ## What you can do with it
 
